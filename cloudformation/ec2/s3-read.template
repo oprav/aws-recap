@@ -1,0 +1,113 @@
+{
+  "Parameters" : {
+    "KeyName": {
+      "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instance",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription" : "must be the name of an existing EC2 KeyPair.",
+      "Default": "instance key"
+    },
+
+    "InstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "Default" : "t2.micro",
+      "AllowedValues" : ["t2.micro"]
+    },
+    "ImageId" : {
+      "Description" : "AMI ID",
+      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+      "Default": "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
+    },
+    "BucketName" : {
+      "Description" : "S3 bucket name",
+      "Type" : "String",
+      "Default" : "oprav-hw"
+    }
+  },
+
+  "Resources" : {
+    "InstanceSecurityGroup": {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Allow inbound SSH and HTTP over 80",
+        "GroupName" : "SSHAndHTTP80",
+        "SecurityGroupIngress" : [{
+          "IpProtocol" : "tcp",
+          "FromPort" : "22",
+          "ToPort" : "22",
+          "CidrIp" : "0.0.0.0/0"
+        },
+        {
+          "IpProtocol" : "tcp",
+          "FromPort" : 80,
+          "ToPort" : 80,
+          "CidrIp" : "0.0.0.0/0"
+        }]
+      }
+    },
+    "EC2ServiceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+         "AssumeRolePolicyDocument": {
+            "Statement": [{
+               "Effect": "Allow",
+               "Principal": {
+                  "Service": ["ec2.amazonaws.com"]
+               },
+               "Action": ["sts:AssumeRole"]
+            }]
+         },
+         "Path": "/"
+      }
+    },
+    "InstanceProfileS3Access" :{
+      "Type" : "AWS::IAM::InstanceProfile",
+      "Properties" : {
+        "InstanceProfileName" : "S3Reader",
+        "Roles" : [ {"Ref": "EC2ServiceRole"} ]
+      }
+    },
+    "EC2ServiceRolePolicies": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": "ec2-s3-permissions",
+        "PolicyDocument": {
+          "Statement": [{
+            "Effect":"Allow",
+            "Action":["s3:*"],
+            "Resource":[
+              {"Fn::Sub": ["arn:aws:s3:::${bucketName}", {"bucketName": {"Ref": "BucketName"}}]},
+              {"Fn::Sub": ["arn:aws:s3:::${bucketName}/*", {"bucketName": {"Ref": "BucketName"}}]}
+            ]
+          }]
+        },
+        "Roles": [{ "Ref": "EC2ServiceRole" }]
+      }
+    },
+    "EC2Instance" : {
+      "Type" : "AWS::EC2::Instance",
+      "Properties" : {
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "KeyName" : { "Ref" : "KeyName" },
+        "ImageId" : {"Ref": "ImageId"},
+        "IamInstanceProfile" : {"Ref": "InstanceProfileS3Access"},
+        "SecurityGroups" : [{ "Ref" : "InstanceSecurityGroup" }],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": ["", [
+              "#!/bin/bash -ex\n",
+              "cd /\n",
+              {"Fn::Sub": ["aws s3 cp s3://${bucketName}/ . --recursive", {"bucketName": {"Ref": "BucketName"}}]}
+            ]]
+          }
+        }
+      }
+    }
+  },
+  "Outputs" : {
+    "PublicIP" : {
+      "Description" : "Public IP address of the newly created EC2 instance",
+      "Value" : { "Fn::GetAtt" : [ "EC2Instance", "PublicIp" ] }
+    }
+  }
+}
